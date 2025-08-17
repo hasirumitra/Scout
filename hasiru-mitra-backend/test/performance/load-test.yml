@@ -1,0 +1,325 @@
+# Artillery Load Test Configuration for Hasiru Mitra Platform
+# Tests the platform's ability to handle 200,000+ farmers as per DPR requirements
+
+config:
+  target: 'http://localhost:3000'
+  http:
+    timeout: 30
+  phases:
+    # Warm-up phase
+    - duration: 60
+      arrivalRate: 10
+      name: "Warm-up"
+    
+    # Ramp-up phase - Simulate peak usage
+    - duration: 120
+      arrivalRate: 50
+      rampTo: 200
+      name: "Peak load simulation"
+    
+    # Sustained load - Simulate normal operating conditions
+    - duration: 300
+      arrivalRate: 100
+      name: "Sustained load"
+    
+    # Stress test - Push beyond normal capacity
+    - duration: 180
+      arrivalRate: 300
+      rampTo: 500
+      name: "Stress test"
+
+  processor: "./test-helpers.js"
+  
+  # Success criteria
+  ensure:
+    p99: 2000  # 99th percentile should be under 2 seconds
+    p95: 1500  # 95th percentile should be under 1.5 seconds
+    maxErrorRate: 5  # Maximum 5% error rate
+
+scenarios:
+  # User Registration and Authentication Flow (40% of traffic)
+  - name: "Authentication Flow"
+    weight: 40
+    flow:
+      - post:
+          url: "/auth/register"
+          json:
+            phoneNumber: "{{ $randomPhoneNumber() }}"
+            password: "StrongPassword123!"
+            firstName: "{{ $randomFirstName() }}"
+            lastName: "{{ $randomLastName() }}"
+            role: "FARMER"
+          capture:
+            - json: "$.userId"
+              as: "userId"
+          expect:
+            - statusCode: 201
+            - hasProperty: "userId"
+
+      - think: 2  # User thinks for 2 seconds
+
+      - function: "generateMockOtp"
+
+      - post:
+          url: "/auth/verify-otp"
+          json:
+            userId: "{{ userId }}"
+            otp: "{{ mockOtp }}"
+          capture:
+            - json: "$.accessToken"
+              as: "accessToken"
+          expect:
+            - statusCode: 200
+            - hasProperty: "accessToken"
+
+      - think: 1
+
+      - post:
+          url: "/auth/login"
+          json:
+            phoneNumber: "{{ phoneNumber }}"
+            password: "StrongPassword123!"
+          expect:
+            - statusCode: 200
+
+  # Profile Management Flow (25% of traffic)
+  - name: "Profile Management"
+    weight: 25
+    flow:
+      - function: "authenticateUser"
+
+      - get:
+          url: "/users/profile"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          expect:
+            - statusCode: 200
+
+      - think: 3
+
+      - put:
+          url: "/users/profile"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          json:
+            firstName: "{{ $randomFirstName() }}"
+            lastName: "{{ $randomLastName() }}"
+            email: "{{ $randomEmail() }}"
+            address: "{{ $randomAddress() }}"
+            city: "{{ $randomCity() }}"
+            state: "Karnataka"
+            pincode: "{{ $randomPincode() }}"
+            preferredLanguage: "KANNADA"
+          expect:
+            - statusCode: 200
+
+  # Farm Management Flow (20% of traffic)
+  - name: "Farm Management"
+    weight: 20
+    flow:
+      - function: "authenticateUser"
+
+      - get:
+          url: "/farms"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          expect:
+            - statusCode: 200
+
+      - think: 2
+
+      - post:
+          url: "/farms"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          json:
+            name: "{{ $randomFarmName() }}"
+            address: "{{ $randomAddress() }}"
+            city: "{{ $randomCity() }}"
+            state: "Karnataka"
+            pincode: "{{ $randomPincode() }}"
+            totalArea: "{{ $randomArea() }}"
+            soilType: "LOAMY"
+            irrigationType: "DRIP"
+            coordinates:
+              lat: "{{ $randomLatitude() }}"
+              lng: "{{ $randomLongitude() }}"
+            boundaries:
+              type: "Polygon"
+              coordinates: [
+                [
+                  ["{{ $randomLongitude() }}", "{{ $randomLatitude() }}"],
+                  ["{{ $randomLongitude() }}", "{{ $randomLatitude() }}"],
+                  ["{{ $randomLongitude() }}", "{{ $randomLatitude() }}"],
+                  ["{{ $randomLongitude() }}", "{{ $randomLatitude() }}"]
+                ]
+              ]
+          capture:
+            - json: "$.id"
+              as: "farmId"
+          expect:
+            - statusCode: 201
+
+      - think: 1
+
+      - get:
+          url: "/farms/{{ farmId }}/analytics"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          expect:
+            - statusCode: 200
+
+  # Crop Management Flow (15% of traffic)
+  - name: "Crop Management"
+    weight: 15
+    flow:
+      - function: "authenticateUser"
+
+      - get:
+          url: "/crops"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          expect:
+            - statusCode: 200
+
+      - think: 2
+
+      - get:
+          url: "/crops/recommendations"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          qs:
+            soilType: "LOAMY"
+            climate: "TROPICAL"
+            season: "KHARIF"
+          expect:
+            - statusCode: 200
+
+      - think: 3
+
+      - post:
+          url: "/crops/cultivation"
+          headers:
+            Authorization: "Bearer {{ accessToken }}"
+          json:
+            farmId: "{{ $randomUUID() }}"
+            cropId: "{{ $randomUUID() }}"
+            variety: "{{ $randomCropVariety() }}"
+            plantingDate: "{{ $currentDate() }}"
+            expectedHarvestDate: "{{ $futureDate() }}"
+            area: "{{ $randomArea() }}"
+            plantingMethod: "DIRECT_SEEDING"
+          expect:
+            - statusCode: 201
+
+# Custom functions for data generation and authentication
+functions:
+  # Generate random phone number in Indian format
+  randomPhoneNumber: |
+    return '+919' + Math.floor(Math.random() * 900000000 + 100000000);
+
+  # Generate random names
+  randomFirstName: |
+    const names = ['Rajesh', 'Priya', 'Suresh', 'Meera', 'Ganesh', 'Lakshmi', 'Ravi', 'Sita'];
+    return names[Math.floor(Math.random() * names.length)];
+
+  randomLastName: |
+    const names = ['Kumar', 'Sharma', 'Patel', 'Reddy', 'Nair', 'Rao', 'Singh', 'Devi'];
+    return names[Math.floor(Math.random() * names.length)];
+
+  # Generate random email
+  randomEmail: |
+    const domains = ['gmail.com', 'yahoo.com', 'hotmail.com'];
+    const username = 'user' + Math.floor(Math.random() * 100000);
+    return username + '@' + domains[Math.floor(Math.random() * domains.length)];
+
+  # Generate random farm data
+  randomFarmName: |
+    const names = ['Green Valley Farm', 'Sunshine Agriculture', 'Golden Harvest', 'Nature Farm'];
+    return names[Math.floor(Math.random() * names.length)];
+
+  randomArea: |
+    return (Math.random() * 10 + 1).toFixed(2);
+
+  randomLatitude: |
+    return (Math.random() * (13.5 - 12.0) + 12.0).toFixed(6);
+
+  randomLongitude: |
+    return (Math.random() * (78.0 - 77.0) + 77.0).toFixed(6);
+
+  # Generate random address components
+  randomAddress: |
+    const villages = ['Krishnapura', 'Ramanagar', 'Doddaballapur', 'Nelamangala'];
+    return villages[Math.floor(Math.random() * villages.length)] + ' Village';
+
+  randomCity: |
+    const cities = ['Bangalore', 'Mysore', 'Hubli', 'Mangalore', 'Belgaum'];
+    return cities[Math.floor(Math.random() * cities.length)];
+
+  randomPincode: |
+    return '5' + Math.floor(Math.random() * 90000 + 10000);
+
+  # Generate crop varieties
+  randomCropVariety: |
+    const varieties = ['Hybrid-1', 'Dwarf-2', 'High-Yield-3', 'Disease-Resistant-4'];
+    return varieties[Math.floor(Math.random() * varieties.length)];
+
+  # Generate dates
+  currentDate: |
+    return new Date().toISOString().split('T')[0];
+
+  futureDate: |
+    const future = new Date();
+    future.setMonth(future.getMonth() + 4);
+    return future.toISOString().split('T')[0];
+
+  randomUUID: |
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+      const r = Math.random() * 16 | 0;
+      const v = c == 'x' ? r : (r & 0x3 | 0x8);
+      return v.toString(16);
+    });
+
+# Performance metrics to collect
+metrics:
+  - name: "authentication_success_rate"
+    expression: "rate(http_request_duration_seconds_count{endpoint='/auth/login',status=~'2..'})"
+
+  - name: "profile_update_latency"
+    expression: "histogram_quantile(0.95, http_request_duration_seconds{endpoint='/users/profile'})"
+
+  - name: "farm_creation_success_rate"
+    expression: "rate(http_request_duration_seconds_count{endpoint='/farms',status=~'2..'})"
+
+  - name: "database_connection_pool_usage"
+    expression: "db_connections_active / db_connections_max"
+
+# Error scenarios to test system resilience
+errorScenarios:
+  - name: "Database Timeout Simulation"
+    probability: 0.01  # 1% of requests
+    effect: "delay"
+    delayMs: 5000
+
+  - name: "Network Partition Simulation"
+    probability: 0.005  # 0.5% of requests
+    effect: "error"
+    statusCode: 503
+
+# Resource monitoring
+monitoring:
+  - metric: "cpu_usage"
+    threshold: 80
+    alert: "High CPU usage during load test"
+
+  - metric: "memory_usage"
+    threshold: 85
+    alert: "High memory usage detected"
+
+  - metric: "database_connections"
+    threshold: 90
+    alert: "Database connection pool near capacity"
+
+  - metric: "response_time_p95"
+    threshold: 2000
+    alert: "Response time exceeding acceptable limits"
